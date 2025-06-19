@@ -1,42 +1,51 @@
-import dotenv from "dotenv";
-dotenv.config();
+// src/index.ts
+import { ApolloServer } from 'apollo-server';
+import { typeDefs } from './schema';
+import { resolvers, setSocketIoInstance } from './resolvers';
+import { createContext } from './context';
+import { createServer } from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 
-import express, { Application, Request } from "express";
-import http from "http";
-import cors from "cors";
-import { ApolloServer } from "apollo-server-express";
-import typeDefs from "./graphql/typeDefs";
-import resolvers from "./graphql/resolvers";
-import getUserFromToken  from "./utils/auth";
-import initSocket from "./socket";
+const PORT = process.env.PORT || 4000;
 
-const app: Application = express();
-const httpServer = http.createServer(app);
-const io = initSocket(httpServer);
-
-app.use(cors());
-
-app.get("/hello", (req, res) => {
-  res.json({ message: "Hello from server" });
+const server = new ApolloServer({
+  typeDefs,
+  resolvers,
+  context: createContext,
 });
 
-async function startServer() {
-  const server = new ApolloServer({
-    typeDefs,
-    resolvers,
-    context: ({ req }: { req: Request }) => {
-      const user = getUserFromToken(req);
-      return { user, io };
-    },
+// Create a separate HTTP server for Socket.io
+const httpServer = createServer();
+const io = new SocketIOServer(httpServer, {
+  cors: {
+    origin: '*', // Allow all origins for development
+    methods: ['GET', 'POST'],
+  },
+});
+
+setSocketIoInstance(io); // Pass Socket.io instance to resolvers
+
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  socket.on('joinEventRoom', (eventId: string) => {
+    socket.join(eventId);
+    console.log(`Socket ${socket.id} joined room ${eventId}`);
   });
 
-  await server.start();
-  server.applyMiddleware({ app });
-
-  const PORT = process.env.PORT || 3000;
-  httpServer.listen(PORT, () => {
-    console.log(`🚀 Server ready at http://localhost:${PORT}${server.graphqlPath}`);
+  socket.on('leaveEventRoom', (eventId: string) => {
+    socket.leave(eventId);
+    console.log(`Socket ${socket.id} left room ${eventId}`);
   });
-}
 
-startServer();
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
+});
+
+server.listen({ port: PORT }).then(({ url }) => {
+  console.log(`🚀 GraphQL server ready at ${url}`);
+  httpServer.listen(4001, () => {
+    console.log('⚡ Socket.io server ready at http://localhost:4001');
+  });
+});
